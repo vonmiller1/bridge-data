@@ -12,10 +12,16 @@ of system this kind of agent commonly has to connect to:
 
 import csv
 import os
+import re
 import sqlite3
 
 import requests
 from langchain_core.tools import tool
+
+_FORBIDDEN_SQL = re.compile(
+    r"\b(insert|update|delete|drop|alter|create|attach|detach|pragma|replace|truncate)\b",
+    re.IGNORECASE,
+)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "company.db")
 LEGACY_CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "legacy_inventory_export.csv")
@@ -37,7 +43,8 @@ def describe_database() -> str:
 
         lines = []
         for table in tables:
-            cursor.execute(f"PRAGMA table_info({table})")
+            safe_name = table.replace('"', '""')
+            cursor.execute(f'PRAGMA table_info("{safe_name}")')
             columns = cursor.fetchall()
             col_desc = ", ".join(f"{col[1]} ({col[2]})" for col in columns)
             lines.append(f"{table}: {col_desc}")
@@ -54,11 +61,22 @@ def run_sql_query(query: str) -> str:
     database. Always call describe_database first so column/table names in
     the query are correct.
     """
-    normalized = query.strip().lower()
+    stripped = query.strip()
+    if not stripped:
+        return "Rejected: empty query."
+
+    normalized = stripped.lower()
     if not normalized.startswith("select"):
         return (
             "Rejected: only SELECT queries are allowed through this tool. "
             "This agent has read-only access to the database by design."
+        )
+    if ";" in stripped:
+        return "Rejected: multiple SQL statements are not allowed."
+    if _FORBIDDEN_SQL.search(stripped):
+        return (
+            "Rejected: query contains disallowed keywords. "
+            "Only read-only SELECT queries are permitted."
         )
 
     conn = sqlite3.connect(DB_PATH)
