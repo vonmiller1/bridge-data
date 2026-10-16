@@ -97,16 +97,13 @@ def ensure_db_exists():
         return
 
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    try:
+    with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(SCHEMA)
         conn.executemany("INSERT INTO customers VALUES (?, ?, ?, ?)", CUSTOMERS)
         conn.executemany("INSERT INTO products VALUES (?, ?, ?, ?)", PRODUCTS)
         conn.executemany("INSERT INTO orders VALUES (?, ?, ?, ?)", ORDERS)
         conn.executemany("INSERT INTO order_items VALUES (?, ?, ?, ?)", ORDER_ITEMS)
         conn.commit()
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":
