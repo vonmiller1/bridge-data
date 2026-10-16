@@ -12,7 +12,10 @@ GEMINI_MODEL = "gemini-flash-latest"
 
 
 def build_chat_model():
-    provider = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
+    raw = os.environ.get("LLM_PROVIDER", "ollama")
+    provider = (raw or "ollama").strip().lower()
+    if not provider:
+        provider = "ollama"
 
     if provider == "ollama":
         from langchain_ollama import ChatOllama
