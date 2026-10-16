@@ -1,62 +1,96 @@
 # DataBridge
 
-A LangChain agent connected to three different kinds of real systems at once: a SQL database, a live third-party REST API, and a legacy flat-file export. Ask it a question, and it decides for itself which system (or combination of systems) it needs to answer it.
+LangChain agent that answers natural-language questions by combining a SQLite company database, a live exchange-rate API, and a legacy warehouse CSV export.
 
-## Why three different system types
+## Overview
 
-Most real integration work isn't "connect to one clean API." It's some mix of a proper database, a couple of external services, and at least one old system that only exports a CSV because nobody has migrated it yet. This project is built around that mix on purpose:
+DataBridge demonstrates multi-system integration: the model chooses among four tools (`describe_database`, `run_sql_query`, `get_exchange_rate`, `read_legacy_inventory_export`) and chains them when a question spans systems—for example, order totals from SQL plus EUR conversion from [Frankfurter](https://frankfurter.dev). The sample schema mirrors a small order-management domain; the legacy CSV is intentionally not linked to the database, so cross-system questions rely on the agent matching product names.
 
-- **Company database** (SQLite, standing in for something like Postgres or Snowflake) -- customers, products, orders, and order items.
-- **Live exchange rate API** ([frankfurter.dev](https://frankfurter.dev), no key required) -- a genuine external network call, not a mock.
-- **Legacy inventory export** (`data/legacy_inventory_export.csv`) -- warehouse stock data that predates the database and was never migrated into it, which is a very ordinary situation at real companies.
+## Features
 
-## How it decides what to use
+- Text-to-SQL over a read-only SQLite schema (customers, products, orders, order items)
+- Schema introspection before query execution
+- Live currency conversion via Frankfurter (no API key)
+- Legacy flat-file inventory read from `data/legacy_inventory_export.csv`
+- Pluggable LLM backends: local Ollama (default), OpenAI, or Google Gemini
 
-The agent has four tools: `describe_database`, `run_sql_query`, `get_exchange_rate`, and `read_legacy_inventory_export`. Given a question, the model decides which tools it needs and in what order. A question like "what's the value of order 8 in euros" needs both the database (to find the order total) and the exchange rate API (to convert it) -- the agent has to sequence both correctly on its own, nothing in the code tells it "always call these two together."
+## Tech stack
 
-The database side follows the standard text-to-SQL agent pattern: `describe_database` returns the schema first, then the model writes its own SQL based on that schema and runs it through `run_sql_query`. Nothing hardcodes what questions are answerable; the model composes the query itself.
+- Python 3.10+
+- [LangChain](https://python.langchain.com/) (`langchain`, `langchain-core`) with provider packages for Ollama, OpenAI, and Gemini
+- SQLite (stdlib), `requests`, `python-dotenv`
 
-## Setup
+## Prerequisites
+
+- Python 3.10 or newer
+- For default local inference: [Ollama](https://ollama.com/) with a model such as `llama3.2`
+- For hosted models: API keys in the environment (see Configuration)
+
+## Getting started
 
 ```bash
+git clone https://github.com/vonmiller1/bridge-data.git
+cd bridge-data
 python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+# Windows: venv\Scripts\activate
+# macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-
-cp .env.example .env
+cp .env.example .env   # Windows: copy .env.example .env
 ```
 
-Default provider is Ollama (fully local, free, no key). Set `LLM_PROVIDER=gemini` or `LLM_PROVIDER=openai` in `.env` to use a hosted model instead.
+Edit `.env` if you want a non-default LLM provider or model name.
 
-The database is created automatically the first time you run the agent (`setup_db.py`, called from `agent.py`) -- no manual setup step.
-
-## Usage
+## Running locally
 
 ```bash
 python agent.py
 ```
 
-Then ask it things like:
+On first run, `setup_db.py` creates `data/company.db` if it is missing. Type questions at the `>` prompt; enter `quit` or `exit` to leave.
 
-```
-> Which customers are in the West region?
-> What's the total value of order 8, and what would that be in EUR?
-> How much Standing Desk stock is in the warehouse?
-> Which products exist in the warehouse export but have never been ordered?
-```
+Example prompts:
 
-That last one needs the agent to cross-reference the legacy CSV against the database, since the two systems were never connected to each other until now.
+- Which customers are in the West region?
+- What is the total value of order 8, and what would that be in EUR?
+- How much Standing Desk stock is in the warehouse?
+- Which products appear in the warehouse export but have never been ordered?
 
-## Design decisions
+## Testing
 
-- **Read-only enforcement on SQL, in code, not just in the prompt.** `run_sql_query` rejects anything that isn't a `SELECT` before it ever reaches the database, regardless of what the model tries to run. Telling the model "only read data" in the system prompt is not the same guarantee as blocking write queries in code -- a model can still be talked into or accidentally generate a destructive query, so the actual safety boundary belongs in the tool, not the instructions.
-- **Schema lookup as a separate tool from query execution.** Rather than one tool that takes a natural-language question and does everything internally, `describe_database` and `run_sql_query` are separate steps the model chains together itself. This mirrors how LangChain's own SQL toolkit is structured, and it means the model's reasoning about the schema is visible in the conversation rather than hidden inside a single tool call.
-- **A real external API, not a mock.** `get_exchange_rate` calls a live, keyless public API rather than returning canned data, so the agent is actually handling a real network call, real response parsing, and a real failure path if the request fails.
-- **The legacy system is deliberately disconnected from the database.** The CSV export and the SQL database don't share any foreign keys or join logic -- matching products between them (by name) is left to the model, the same way it would be at a company where two systems were never properly integrated.
-- **Row cap on query results.** `run_sql_query` caps output at 50 rows so a broad query doesn't flood the model's context window; the tool tells the model how many rows were cut off rather than silently truncating.
+This repository does not ship an automated test suite. After changes, run `python agent.py` and exercise the sample prompts above manually.
 
-## Future work
+## Project structure
 
-- Add a write-capable tool behind an explicit confirmation step, to demonstrate handling actions with real side effects safely rather than staying read-only everywhere.
-- Swap the flat-file "legacy" system for something closer to a real legacy interface, like a SOAP endpoint or fixed-width file format.
-- Add a second live API (e.g. a shipping/logistics lookup) to test how the agent handles three or more available tools with overlapping relevance.
+| Path | Role |
+|------|------|
+| `agent.py` | CLI entrypoint; builds the LangChain agent and REPL loop |
+| `models.py` | Selects chat model from `LLM_PROVIDER` |
+| `tools.py` | Database, exchange-rate, and legacy CSV tools |
+| `setup_db.py` | Creates and seeds `data/company.db` |
+| `data/company.db` | Sample SQLite database (created on first run if absent) |
+| `data/legacy_inventory_export.csv` | Legacy warehouse export |
+| `requirements.txt` | Python dependencies |
+| `.env.example` | Environment variable template |
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_PROVIDER` | `ollama` | `ollama`, `openai`, or `gemini` |
+| `OLLAMA_MODEL` | `llama3.2` | Ollama model tag when using Ollama |
+| `OPENAI_API_KEY` | — | Required when `LLM_PROVIDER=openai` |
+| `GEMINI_API_KEY` | — | Required when `LLM_PROVIDER=gemini` |
+
+Do not commit real API keys; keep them in `.env` only.
+
+## Deployment
+
+No Dockerfile or CI workflow is included. Run on any host with Python, network access (for hosted LLMs and Frankfurter), and optional Ollama for local models.
+
+## Contributing
+
+Fork the repository, create a feature branch, and use clear commit messages. Open a pull request with a short description of behavior and any security-sensitive changes.
+
+## License
+
+No `LICENSE` file is present in this repository; add one before distributing or reusing the code commercially.
