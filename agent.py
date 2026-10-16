@@ -56,13 +56,22 @@ def run():
     print()
 
     while True:
-        question = input("> ").strip()
+        try:
+            question = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
         if question.lower() in ("quit", "exit"):
             break
         if not question:
             continue
 
-        result = agent.invoke({"messages": [{"role": "user", "content": question}]})
+        try:
+            result = agent.invoke({"messages": [{"role": "user", "content": question}]})
+        except Exception as exc:
+            print(f"\nAgent error: {exc}\n")
+            continue
+
         print()
         print(result["messages"][-1].content)
         print()
